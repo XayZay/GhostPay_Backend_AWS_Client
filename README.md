@@ -1,4 +1,4 @@
-# GhostPay 👻
+# GhostPay 
 
 GhostPay is a fast, serverless payment and merchant management backend built on AWS. It enables AI-driven interactions, including WhatsApp and voice-based conversational commerce using Gemini and Whisper integrations, alongside standard payment processing via Kora.
 
