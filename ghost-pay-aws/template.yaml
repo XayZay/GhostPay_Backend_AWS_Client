@@ -1,0 +1,566 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Ghost Pay - Voice-powered payment collection for Nigerian merchants
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    MemorySize: 256
+    Timeout: 30
+    Tracing: Active
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        TRANSACTIONS_TABLE: !Ref TransactionsTable
+        MERCHANTS_TABLE: !Ref MerchantsTable
+        IDEMPOTENCY_TABLE: !Ref IdempotencyTable
+        AUDIO_BUCKET: !Ref AudioBucket
+        KORA_WEBHOOK_URL: !Ref KoraWebhookUrl
+        FIREBASE_PROJECT_ID: !Ref FirebaseProjectId
+        WHATSAPP_PHONE_NUMBER_ID: !Ref WhatsAppPhoneNumberId
+        OPENAI_SECRET_NAME: ghostpay/openai
+        GEMINI_SECRET_NAME: ghostpay/gemini
+        YARNGPT_SECRET_NAME: ghostpay/yarngpt
+        KORA_SECRET_NAME: ghostpay/kora
+        WHATSAPP_SECRET_NAME: ghostpay/whatsapp
+        JWT_SECRET_NAME: ghostpay/jwt
+        GOOGLE_SA_SECRET_NAME: ghostpay/google-sa
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  FirebaseProjectId:
+    Type: String
+    Default: ghost-pay-kora-hackathon
+    Description: Firebase/GCP project ID (for FCM push notifications)
+
+  KoraWebhookUrl:
+    Type: String
+    Default: ''
+    Description: Kora webhook callback URL (fill after first deploy with ApiUrl output)
+
+  WhatsAppPhoneNumberId:
+    Type: String
+    Default: ''
+    Description: WhatsApp Cloud API phone number ID
+
+  AlarmEmail:
+    Type: String
+    Default: ''
+    Description: Email address for CloudWatch alarm notifications
+
+# ---------------------------------------------------------------------------
+# Conditions
+# ---------------------------------------------------------------------------
+Conditions:
+  HasAlarmEmail: !Not
+    - !Equals
+      - !Ref AlarmEmail
+      - ''
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # =========================================================================
+  # DynamoDB Tables
+  # =========================================================================
+  TransactionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: GhostPayTransactions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: reference
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: reference
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: StatusCreatedAtIndex
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  MerchantsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: GhostPayMerchants
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: merchantId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: merchantId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  IdempotencyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: GhostPayIdempotency
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: hash
+          AttributeType: S
+      KeySchema:
+        - AttributeName: hash
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # =========================================================================
+  # S3 Bucket (Private — audio accessed via presigned URLs)
+  # =========================================================================
+  AudioBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ghost-pay-audio-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # =========================================================================
+  # SQS Dead Letter Queues
+  # =========================================================================
+  VoiceIngestDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: ghost-pay-voice-ingest-dlq
+      MessageRetentionPeriod: 1209600
+
+  WebhookDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: ghost-pay-webhook-dlq
+      MessageRetentionPeriod: 1209600
+
+  QueryChargeDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: ghost-pay-query-charge-dlq
+      MessageRetentionPeriod: 1209600
+
+  # =========================================================================
+  # SNS Alarm Topic
+  # =========================================================================
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: ghost-pay-alarms
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  # =========================================================================
+  # HTTP API (API Gateway v2)
+  # =========================================================================
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+
+  # =========================================================================
+  # Shared IAM Policy for Secrets Manager
+  # =========================================================================
+
+  # --- 1. MerchantAuth ---
+  MerchantAuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ghost-pay-merchantAuth
+      Handler: src/handlers/merchantAuth.handler
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /merchantAuth
+            Method: POST
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MerchantsTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ghostpay/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        EntryPoints:
+          - src/handlers/merchantAuth.ts
+        External:
+          - '@aws-sdk/*'
+
+  # --- 2. VoiceIngest ---
+  VoiceIngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ghost-pay-voiceIngest
+      Handler: src/handlers/voiceIngest.handler
+      MemorySize: 512
+      Timeout: 90
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt VoiceIngestDLQ.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /voiceIngest
+            Method: POST
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TransactionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IdempotencyTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MerchantsTable
+        - S3CrudPolicy:
+            BucketName: !Ref AudioBucket
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ghostpay/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        EntryPoints:
+          - src/handlers/voiceIngest.ts
+        External:
+          - '@aws-sdk/*'
+
+  # --- 3. VerifyAccount ---
+  VerifyAccountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ghost-pay-verifyAccount
+      Handler: src/handlers/verifyAccount.handler
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /verifyAccount
+            Method: POST
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ghostpay/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        EntryPoints:
+          - src/handlers/verifyAccount.ts
+        External:
+          - '@aws-sdk/*'
+
+  # --- 4. CreateMerchant ---
+  CreateMerchantFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ghost-pay-createMerchant
+      Handler: src/handlers/createMerchant.handler
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /createMerchant
+            Method: POST
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MerchantsTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ghostpay/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        EntryPoints:
+          - src/handlers/createMerchant.ts
+        External:
+          - '@aws-sdk/*'
+
+  # --- 5. MerchantFcm ---
+  MerchantFcmFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ghost-pay-merchantFcm
+      Handler: src/handlers/merchantFcm.handler
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /merchantFcm
+            Method: POST
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MerchantsTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ghostpay/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        EntryPoints:
+          - src/handlers/merchantFcm.ts
+        External:
+          - '@aws-sdk/*'
+
+  # --- 6. KoraWebhook ---
+  KoraWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ghost-pay-koraWebhook
+      Handler: src/handlers/koraWebhook.handler
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt WebhookDLQ.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /koraWebhook
+            Method: POST
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TransactionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MerchantsTable
+        - S3CrudPolicy:
+            BucketName: !Ref AudioBucket
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ghostpay/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        EntryPoints:
+          - src/handlers/koraWebhook.ts
+        External:
+          - '@aws-sdk/*'
+
+  # --- 7. QueryCharge (EventBridge Scheduled) ---
+  QueryChargeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ghost-pay-queryCharge
+      Handler: src/handlers/queryCharge.handler
+      Timeout: 60
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt QueryChargeDLQ.Arn
+      Events:
+        ScheduleEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(2 minutes)
+            Description: Poll Kora for stale pending transactions
+            Enabled: true
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TransactionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MerchantsTable
+        - S3CrudPolicy:
+            BucketName: !Ref AudioBucket
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ghostpay/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        EntryPoints:
+          - src/handlers/queryCharge.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # CloudWatch Alarms
+  # =========================================================================
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ghost-pay-lambda-errors
+      AlarmDescription: Total Lambda errors exceed 5 in 5 minutes
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  VoiceIngestDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ghost-pay-voiceIngest-p99-duration
+      AlarmDescription: voiceIngest p99 latency exceeds 50 seconds
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 50000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref VoiceIngestFunction
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  VoiceIngestDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ghost-pay-voiceIngest-dlq
+      AlarmDescription: Messages in VoiceIngest DLQ
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt VoiceIngestDLQ.QueueName
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  WebhookDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ghost-pay-webhook-dlq
+      AlarmDescription: Messages in Webhook DLQ
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt WebhookDLQ.QueueName
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  QueryChargeDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ghost-pay-queryCharge-dlq
+      AlarmDescription: Messages in QueryCharge DLQ
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt QueryChargeDLQ.QueueName
+      AlarmActions:
+        - !Ref AlarmTopic
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  ApiUrl:
+    Description: HTTP API endpoint URL
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+
+  TransactionsTableName:
+    Description: DynamoDB Transactions table name
+    Value: !Ref TransactionsTable
+
+  MerchantsTableName:
+    Description: DynamoDB Merchants table name
+    Value: !Ref MerchantsTable
+
+  IdempotencyTableName:
+    Description: DynamoDB Idempotency table name
+    Value: !Ref IdempotencyTable
+
+  AudioBucketName:
+    Description: S3 audio bucket name
+    Value: !Ref AudioBucket
