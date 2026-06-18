@@ -51,52 +51,52 @@ graph TD
 
 | File | What it does |
 |---|---|
-| [types.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/types.ts) | All shared interfaces (AudioFile, KoraCharge, TransactionRecord, etc.) |
-| [logger.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/utils/logger.ts) | Structured JSON logging with requestId correlation |
-| [retry.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/utils/retry.ts) | Exponential backoff with jitter (3 retries, 200ms base) |
-| [phone.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/utils/phone.ts) | Nigerian phone normalization (+234 E.164) |
-| [speech.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/utils/speech.ts) | Number-to-words for Naira amounts in YarnGPT |
+| [types.ts](./src/types.ts) | All shared interfaces (AudioFile, KoraCharge, TransactionRecord, etc.) |
+| [logger.ts](./src/utils/logger.ts) | Structured JSON logging with requestId correlation |
+| [retry.ts](./src/utils/retry.ts) | Exponential backoff with jitter (3 retries, 200ms base) |
+| [phone.ts](./src/utils/phone.ts) | Nigerian phone normalization (+234 E.164) |
+| [speech.ts](./src/utils/speech.ts) | Number-to-words for Naira amounts in YarnGPT |
 
 ### Database Layer (DynamoDB)
 
 | File | Replaces | Key functions |
 |---|---|---|
-| [client.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/db/client.ts) | `admin.firestore()` | DynamoDB Document Client singleton |
-| [transactions.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/db/transactions.ts) | Firestore transactions collection | create, get, markPaid, markFailed, getPendingBefore (GSI) |
-| [merchants.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/db/merchants.ts) | Firestore merchants collection | upsert, get, savePayoutDetails, saveFcmToken |
-| [idempotency.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/db/idempotency.ts) | Firestore idempotency collection | getCached (60s window), saveCached (DynamoDB TTL) |
+| [client.ts](./src/db/client.ts) | `admin.firestore()` | DynamoDB Document Client singleton |
+| [transactions.ts](./src/db/transactions.ts) | Firestore transactions collection | create, get, markPaid, markFailed, getPendingBefore (GSI) |
+| [merchants.ts](./src/db/merchants.ts) | Firestore merchants collection | upsert, get, savePayoutDetails, saveFcmToken |
+| [idempotency.ts](./src/db/idempotency.ts) | Firestore idempotency collection | getCached (60s window), saveCached (DynamoDB TTL) |
 
 ### Services Layer
 
 | File | Replaces | Key change |
 |---|---|---|
-| [secrets.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/services/secrets.ts) | `process.env` direct access | Secrets Manager with 5-min in-memory cache |
-| [storage.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/services/storage.ts) | Firebase Storage `makePublic()` | Private S3 + presigned URLs (15 min) |
-| [fcm.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/services/fcm.ts) | `admin.messaging().send()` | Direct FCM HTTP v1 + Google OAuth2 |
-| [whisper.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/services/whisper.ts) | Original transcribeAudio | + Secrets Manager + retry |
-| [kora.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/services/kora.ts) | Original Kora functions | + retry + resolveBankAccount extracted |
-| [whatsapp.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/services/whatsapp.ts) | Original WhatsApp sender | + Secrets Manager JSON secret |
-| [yarngpt.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/services/yarngpt.ts) | Original YarnGPT | + retry + Secrets Manager |
-| [geminiParser.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/geminiParser.ts) | Original (unchanged logic) | Updated to use Secrets Manager |
+| [secrets.ts](./src/services/secrets.ts) | `process.env` direct access | Secrets Manager with 5-min in-memory cache |
+| [storage.ts](./src/services/storage.ts) | Firebase Storage `makePublic()` | Private S3 + presigned URLs (15 min) |
+| [fcm.ts](./src/services/fcm.ts) | `admin.messaging().send()` | Direct FCM HTTP v1 + Google OAuth2 |
+| [whisper.ts](./src/services/whisper.ts) | Original transcribeAudio | + Secrets Manager + retry |
+| [kora.ts](./src/services/kora.ts) | Original Kora functions | + retry + resolveBankAccount extracted |
+| [whatsapp.ts](./src/services/whatsapp.ts) | Original WhatsApp sender | + Secrets Manager JSON secret |
+| [yarngpt.ts](./src/services/yarngpt.ts) | Original YarnGPT | + retry + Secrets Manager |
+| [geminiParser.ts](./src/geminiParser.ts) | Original (unchanged logic) | Updated to use Secrets Manager |
 
 ### Middleware
 
 | File | Replaces |
 |---|---|
-| [lambdaAdapter.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/middleware/lambdaAdapter.ts) | Firebase `onRequest` handler signature |
-| [auth.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/middleware/auth.ts) | Original requireJwt + getMerchantIdFromRequest |
+| [lambdaAdapter.ts](./src/middleware/lambdaAdapter.ts) | Firebase `onRequest` handler signature |
+| [auth.ts](./src/middleware/auth.ts) | Original requireJwt + getMerchantIdFromRequest |
 
 ### Lambda Handlers
 
 | File | Route | Description |
 |---|---|---|
-| [merchantAuth.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/handlers/merchantAuth.ts) | POST /merchantAuth | Phone-based signup/login → JWT |
-| [voiceIngest.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/handlers/voiceIngest.ts) | POST /voiceIngest | Audio → Whisper → Gemini → Kora → WhatsApp |
-| [verifyAccount.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/handlers/verifyAccount.ts) | POST /verifyAccount | Bank account verification via Kora |
-| [createMerchant.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/handlers/createMerchant.ts) | POST /createMerchant | Save payout bank details |
-| [merchantFcm.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/handlers/merchantFcm.ts) | POST /merchantFcm | Store FCM push token |
-| [koraWebhook.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/handlers/koraWebhook.ts) | POST /koraWebhook | Payment webhook → voice confirmation |
-| [queryCharge.ts](file:///C:/Users/User/Desktop/Personal/Personal%20Studies/Projects/Hackathons/Kora%20Hackathon/ghost-pay-aws/src/handlers/queryCharge.ts) | EventBridge (2 min) | Poll stale pending transactions |
+| [merchantAuth.ts](./src/handlers/merchantAuth.ts) | POST /merchantAuth | Phone-based signup/login → JWT |
+| [voiceIngest.ts](./src/handlers/voiceIngest.ts) | POST /voiceIngest | Audio → Whisper → Gemini → Kora → WhatsApp |
+| [verifyAccount.ts](./src/handlers/verifyAccount.ts) | POST /verifyAccount | Bank account verification via Kora |
+| [createMerchant.ts](./src/handlers/createMerchant.ts) | POST /createMerchant | Save payout bank details |
+| [merchantFcm.ts](./src/handlers/merchantFcm.ts) | POST /merchantFcm | Store FCM push token |
+| [koraWebhook.ts](./src/handlers/koraWebhook.ts) | POST /koraWebhook | Payment webhook → voice confirmation |
+| [queryCharge.ts](./src/handlers/queryCharge.ts) | EventBridge (2 min) | Poll stale pending transactions |
 
 ---
 
