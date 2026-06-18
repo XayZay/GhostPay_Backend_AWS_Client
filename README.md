@@ -14,6 +14,7 @@ GhostPay is a fast, serverless payment and merchant management backend built on 
 ## Project Structure
 
 - `src/handlers/` - AWS Lambda entry points (e.g., Merchant Auth, Kora Webhooks, Voice Ingestion, Querying Charges).
+- `src/application/` - Use-case orchestration that coordinates services and persistence behind thin handlers.
 - `src/services/` - External API and service implementations (WhatsApp, Whisper, Gemini/YarnGPT, Kora Payments, FCM).
 - `src/db/` - Database abstractions (Merchants, Transactions, Idempotency tracking).
 - `src/middleware/` - Custom Lambda handlers and Authorization guards.
